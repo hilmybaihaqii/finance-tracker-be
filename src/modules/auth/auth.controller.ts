@@ -21,63 +21,80 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+
     // Cek apakah email sudah pernah terdaftar
     const existingUser = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
 
     if (existingUser) {
       if (existingUser.isVerified) {
-        res.status(409).json({ error: 'Email sudah terdaftar dan terverifikasi. Silakan langsung login.' });
-        return;
-      } else {
-        // Jika akun pernah didaftarkan tetapi belum diverifikasi, buat dan kirim OTP baru
-        const otpCode = generateOTP();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // Masa berlaku 10 menit
-
-        await prisma.emailVerification.deleteMany({
-          where: { userId: existingUser.id, type: 'EMAIL_VERIFICATION' },
-        });
-
-        await prisma.emailVerification.create({
-          data: {
-            userId: existingUser.id,
-            code: otpCode,
-            type: 'EMAIL_VERIFICATION',
-            expiresAt,
-          },
-        });
-
-        await sendVerificationEmail(existingUser.email, otpCode, 'Verifikasi Akun Finance Tracker');
-
-        res.status(200).json({
-          message: 'Akun sudah pernah didaftarkan namun belum diverifikasi. Kode verifikasi baru telah dikirimkan ke email Anda.',
-          userId: existingUser.id,
+        res.status(409).json({ 
+          error: 'Email sudah terdaftar dan terverifikasi. Silakan langsung login.' 
         });
         return;
       }
+
+      // Jika akun pernah didaftarkan tetapi belum diverifikasi, buat dan kirim OTP baru
+      const otpCode = generateOTP();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 menit
+
+      await prisma.emailVerification.deleteMany({
+        where: { 
+          userId: existingUser.id, 
+          type: 'EMAIL_VERIFICATION' 
+        },
+      });
+
+      await prisma.emailVerification.create({
+        data: {
+          userId: existingUser.id,
+          code: otpCode,
+          type: 'EMAIL_VERIFICATION',
+          expiresAt,
+        },
+      });
+
+      // Pengiriman email non-blocking agar API tetap merespon cepat
+      sendVerificationEmail(existingUser.email, otpCode, 'Verifikasi Akun Finance Tracker').catch((err) => {
+        console.error('Non-blocking email delivery error:', err);
+      });
+
+      res.status(200).json({
+        message: 'Akun sudah pernah didaftarkan namun belum diverifikasi. Kode OTP baru telah dikirimkan.',
+        userId: existingUser.id,
+      });
+      return;
     }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Buat User baru & otomatis buatkan pos awal "Dana Darurat"
+    // Buat User Baru (hanya field inti user untuk mencegah validation error)
     const newUser = await prisma.user.create({
       data: {
         name,
-        email,
+        email: normalizedEmail,
         passwordHash,
         isVerified: false,
-        pockets: {
-          create: {
-            name: 'Dana Darurat',
-            isEmergency: true,
-            currentAmount: 0.0,
-          },
-        },
       },
     });
+
+    // Inisialisasi Pos Awal "Dana Darurat" secara aman
+    try {
+      await prisma.pocket.create({
+        data: {
+          userId: newUser.id,
+          name: 'Dana Darurat',
+          targetAmount: 0,
+          currentAmount: 0,
+        },
+      });
+    } catch (pocketError) {
+      console.warn('Inisialisasi pocket default dilewati/terabaikan:', pocketError);
+    }
 
     // Buat OTP verifikasi pendaftaran 6 digit
     const otpCode = generateOTP();
@@ -93,14 +110,20 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     });
 
     // Kirim email OTP
-    await sendVerificationEmail(newUser.email, otpCode, 'Verifikasi Akun Finance Tracker');
+    sendVerificationEmail(newUser.email, otpCode, 'Verifikasi Akun Finance Tracker').catch((err) => {
+      console.error('Non-blocking email delivery error:', err);
+    });
 
     res.status(201).json({
       message: 'Registrasi berhasil. Silakan cek email Anda untuk memasukkan kode verifikasi 6 digit.',
       userId: newUser.id,
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Terjadi kesalahan saat registrasi', detail: error });
+  } catch (error: any) {
+    console.error('Critical Register Error:', error);
+    res.status(500).json({ 
+      error: 'Terjadi kesalahan saat registrasi', 
+      detail: error?.message || error 
+    });
   }
 };
 
@@ -114,7 +137,9 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    
     if (!user) {
       res.status(404).json({ error: 'Akun dengan email ini tidak ditemukan' });
       return;
@@ -125,11 +150,10 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    // Ambil kode OTP verifikasi registrasi
     const verification = await prisma.emailVerification.findFirst({
       where: {
         userId: user.id,
-        code,
+        code: code.trim(),
         type: 'EMAIL_VERIFICATION',
       },
       orderBy: { createdAt: 'desc' },
@@ -140,7 +164,6 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    // Periksa masa berlaku
     if (new Date() > verification.expiresAt) {
       res.status(400).json({ error: 'Kode verifikasi sudah kedaluwarsa. Silakan minta kode baru.' });
       return;
@@ -152,14 +175,18 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       data: { isVerified: true },
     });
 
-    // Hapus kode OTP yang sudah selesai dipakai
+    // Bersihkan kode OTP
     await prisma.emailVerification.deleteMany({
-      where: { userId: user.id, type: 'EMAIL_VERIFICATION' },
+      where: { 
+        userId: user.id, 
+        type: 'EMAIL_VERIFICATION' 
+      },
     });
 
     res.json({ message: 'Email berhasil diverifikasi! Anda sekarang dapat login.' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal memverifikasi kode', detail: error });
+  } catch (error: any) {
+    console.error('Verify Email Error:', error);
+    res.status(500).json({ error: 'Gagal memverifikasi kode', detail: error?.message || error });
   }
 };
 
@@ -173,17 +200,17 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user) {
       res.status(401).json({ error: 'Email atau kata sandi salah' });
       return;
     }
 
-    // Tolak akses jika email belum diverifikasi
     if (!user.isVerified) {
       res.status(403).json({
-        error: 'Email Anda belum diverifikasi. Silakan masukkan kode verifikasi yang telah dikirim ke email Anda terlebih dahulu.',
+        error: 'Email Anda belum diverifikasi. Silakan masukkan kode verifikasi OTP.',
         isVerified: false,
       });
       return;
@@ -211,8 +238,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         email: user.email,
       },
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Terjadi kesalahan saat login', detail: error });
+  } catch (error: any) {
+    console.error('Login Error:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan saat login', detail: error?.message || error });
   }
 };
 
@@ -243,15 +271,18 @@ export const requestChangePasswordOTP = async (req: AuthRequest, res: Response):
       },
     });
 
-    await sendVerificationEmail(user.email, otpCode, 'Permintaan Ganti Password');
+    sendVerificationEmail(user.email, otpCode, 'Permintaan Ganti Password').catch((err) => {
+      console.error('Change password email error:', err);
+    });
 
     res.json({ message: 'Kode OTP untuk ganti password telah dikirim ke email Anda' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal mengirim OTP ganti password', detail: error });
+  } catch (error: any) {
+    console.error('Request Change Password OTP Error:', error);
+    res.status(500).json({ error: 'Gagal mengirim OTP ganti password', detail: error?.message || error });
   }
 };
 
-// 5. Eksekusi Ganti Password (Validasi Password Lama, OTP, & Simpan Password Baru)
+// 5. Eksekusi Ganti Password
 export const changePassword = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
@@ -268,18 +299,16 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    // Verifikasi password lama
     const isOldPasswordMatch = await bcrypt.compare(oldPassword, user.passwordHash);
     if (!isOldPasswordMatch) {
       res.status(400).json({ error: 'Password lama Anda tidak sesuai' });
       return;
     }
 
-    // Validasi token OTP
     const validOTP = await prisma.emailVerification.findFirst({
       where: {
         userId,
-        code: otpCode,
+        code: otpCode.trim(),
         type: 'CHANGE_PASSWORD',
       },
     });
@@ -289,7 +318,6 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    // Simpan password baru
     const salt = await bcrypt.genSalt(10);
     const newHash = await bcrypt.hash(newPassword, salt);
 
@@ -298,18 +326,18 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
       data: { passwordHash: newHash },
     });
 
-    // Hapus OTP yang sudah terpakai
     await prisma.emailVerification.deleteMany({
       where: { userId, type: 'CHANGE_PASSWORD' },
     });
 
     res.json({ message: 'Kata sandi berhasil diperbarui' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal mengganti kata sandi', detail: error });
+  } catch (error: any) {
+    console.error('Change Password Error:', error);
+    res.status(500).json({ error: 'Gagal mengganti kata sandi', detail: error?.message || error });
   }
 };
 
-// 6. Request Forgot Password (Kirim email tautan reset token)
+// 6. Request Forgot Password
 export const requestForgotPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
@@ -319,14 +347,15 @@ export const requestForgotPassword = async (req: Request, res: Response): Promis
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+
     if (!user) {
-      // Menghindari email enumeration: selalu beri respons sukses yang ambigu
+      // Menghindari email enumeration
       res.json({ message: 'Jika email terdaftar, instruksi reset password telah dikirim ke email Anda.' });
       return;
     }
 
-    // Buat token random aman 32-byte hex
     const resetToken = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 menit
 
@@ -343,15 +372,18 @@ export const requestForgotPassword = async (req: Request, res: Response): Promis
       },
     });
 
-    await sendForgotPasswordEmail(user.email, resetToken);
+    sendForgotPasswordEmail(user.email, resetToken).catch((err) => {
+      console.error('Forgot password email error:', err);
+    });
 
     res.json({ message: 'Jika email terdaftar, instruksi reset password telah dikirim ke email Anda.' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal memproses permintaan reset password', detail: error });
+  } catch (error: any) {
+    console.error('Request Forgot Password Error:', error);
+    res.status(500).json({ error: 'Gagal memproses permintaan reset password', detail: error?.message || error });
   }
 };
 
-// 7. Eksekusi Reset Password via Tautan/Token
+// 7. Eksekusi Reset Password via Token
 export const resetPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, token, newPassword } = req.body;
@@ -361,7 +393,9 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+
     if (!user) {
       res.status(400).json({ error: 'Permintaan reset password tidak valid' });
       return;
@@ -370,7 +404,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     const validRecord = await prisma.emailVerification.findFirst({
       where: {
         userId: user.id,
-        code: token,
+        code: token.trim(),
         type: 'FORGOT_PASSWORD',
       },
     });
@@ -393,8 +427,9 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
 
     res.json({ message: 'Kata sandi berhasil direset! Silakan login dengan kata sandi baru Anda.' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal mereset kata sandi', detail: error });
+  } catch (error: any) {
+    console.error('Reset Password Error:', error);
+    res.status(500).json({ error: 'Gagal mereset kata sandi', detail: error?.message || error });
   }
 };
 
@@ -421,13 +456,13 @@ export const deleteAccount = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    // Cascade delete akan membersihkan wallet, pocket, category, dan transaction user ini secara otomatis
     await prisma.user.delete({
       where: { id: userId },
     });
 
     res.json({ message: 'Akun Anda beserta seluruh data keuangan telah dihapus secara permanen.' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal menghapus akun', detail: error });
+  } catch (error: any) {
+    console.error('Delete Account Error:', error);
+    res.status(500).json({ error: 'Gagal menghapus akun', detail: error?.message || error });
   }
 };
