@@ -1,0 +1,40 @@
+{
+  "name": "finance-tracker-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/src/app.js",
+  "scripts": {
+  "dev": "tsx watch src/app.ts",
+  "build": "npx prisma generate && tsc",
+  "postbuild": "cp -r src/generated dist/src/generated || xcopy /E /I src\\generated dist\\src\\generated",
+  "start": "node dist/src/app.js",
+  "db:migrate": "npx prisma migrate deploy"
+},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.4",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.0.11",
+    "pg": "^8.23.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.6.3",
+    "@types/nodemailer": "^8.0.2",
+    "prisma": "^7.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

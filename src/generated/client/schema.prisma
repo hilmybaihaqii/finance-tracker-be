@@ -1,0 +1,123 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 1. Akun Pengguna
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  isVerified   Boolean  @default(false) // Penanda apakah email sudah diverifikasi
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  wallets            Wallet[]
+  pockets            Pocket[]
+  categories         Category[]
+  transactions       Transaction[]
+  emailVerifications EmailVerification[]
+}
+
+// 2. Sumber Saldo Cair (Dompet Kas, Bank, e-Wallet)
+model Wallet {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String // Contoh: "BCA", "GoPay", "Dompet Fisik"
+  balance      Decimal       @default(0.0) @db.Decimal(15, 2)
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+
+  @@index([userId])
+}
+
+// 3. Kantong Khusus: Dana Darurat & Tabungan Target
+model Pocket {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String // Contoh: "Dana Darurat", "Beli Laptop"
+  targetAmount  Decimal?      @db.Decimal(15, 2)
+  currentAmount Decimal       @default(0.0) @db.Decimal(15, 2)
+  isEmergency   Boolean       @default(false) // Penanda khusus Pos Dana Darurat
+  transactions  Transaction[]
+  createdAt     DateTime      @default(now())
+
+  @@index([userId])
+}
+
+// 4. Kategori Transaksi
+model Category {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String // Contoh: "Makanan", "Gaji", "Kesehatan"
+  type         String // "INCOME" atau "EXPENSE"
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+// 5. Histori Mutasi Keuangan
+enum TransactionType {
+  INCOME // Pemasukan ke dompet
+  EXPENSE // Pengeluaran dari dompet
+  EMERGENCY_DEPOSIT // Alokasi uang masuk ke dana darurat
+  EMERGENCY_WITHDRAW // Penarikan dana darurat ke dompet
+  SAVING_DEPOSIT // Setoran ke pos tabungan
+  SAVING_WITHDRAW // Penarikan dari tabungan
+}
+
+// 6. Tabel Kode Verifikasi Email (OTP)
+enum VerificationType {
+  EMAIL_VERIFICATION
+  CHANGE_PASSWORD
+  FORGOT_PASSWORD
+}
+
+model EmailVerification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String // Kode 6 digit OTP
+  type      VerificationType @default(EMAIL_VERIFICATION)
+  expiresAt DateTime // Waktu kadaluarsa (misal: 10 menit sejak dibuat)
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        TransactionType
+  amount      Decimal         @db.Decimal(15, 2)
+  description String?
+  date        DateTime        @default(now())
+
+  walletId String?
+  wallet   Wallet? @relation(fields: [walletId], references: [id])
+
+  pocketId String?
+  pocket   Pocket? @relation(fields: [pocketId], references: [id])
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([date])
+}

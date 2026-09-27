@@ -1,0 +1,166 @@
+### Variabel Lingkungan
+@baseUrl = http://localhost:5000/api
+@authToken = {{login.response.body.token}}
+@walletId = {{createWallet.response.body.wallet.id}}
+@pocketId = {{createPocket.response.body.pocket.id}}
+@categoryId = {{createCategory.response.body.category.id}}
+
+### 1. Health Check Server & Database
+GET {{baseUrl}}/health
+
+### ------------------------------------------------------------
+### AUTHENTICATION FLOW
+### ------------------------------------------------------------
+
+### 2. Register Akun Baru
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "name": "Budi Santoso",
+  "email": "budi@example.com",
+  "password": "PasswordRahasia123!"
+}
+
+### 3. Verifikasi Email OTP
+# Catatan: Ambil kode 6 digit yang tercetak di terminal backend Anda!
+POST {{baseUrl}}/auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "budi@example.com",
+  "code": "217293"
+}
+
+### 4. Login (Menghasilkan JWT Token otomatis ke variabel @authToken)
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "budi@example.com",
+  "password": "PasswordRahasia123!"
+}
+
+### 5. Cek Profil User
+GET {{baseUrl}}/profile
+Authorization: Bearer {{authToken}}
+
+### ------------------------------------------------------------
+### WALLETS & POCKETS FLOW
+### ------------------------------------------------------------
+
+### 6. Buat Dompet Kas Utama (Rekening Bank BCA)
+# @name createWallet
+POST {{baseUrl}}/finance/wallets
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Bank BCA",
+  "balance": 10000000
+}
+
+### 7. Ambil Semua Dompet
+GET {{baseUrl}}/finance/wallets
+Authorization: Bearer {{authToken}}
+
+### 8. Buat Pos Tabungan Berencana (Beli Laptop)
+# @name createPocket
+POST {{baseUrl}}/pockets
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Beli Laptop Kerja",
+  "targetAmount": 15000000,
+  "isEmergency": false
+}
+
+### 9. Ambil Semua Pockets (Dana Darurat & Tabungan dengan Progress %)
+GET {{baseUrl}}/pockets
+Authorization: Bearer {{authToken}}
+
+### ------------------------------------------------------------
+### CATEGORIES FLOW
+### ------------------------------------------------------------
+
+### 10. Buat Kategori Pengeluaran (Makan & Minum)
+# @name createCategory
+POST {{baseUrl}}/categories
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Makan & Minum",
+  "type": "EXPENSE"
+}
+
+### 11. Ambil Semua Kategori
+GET {{baseUrl}}/categories
+Authorization: Bearer {{authToken}}
+
+### ------------------------------------------------------------
+### TRANSAKSI & MUTASI SALDO FLOW (ACID)
+### ------------------------------------------------------------
+
+### 12. Transaksi Pengeluaran (Makan Siang)
+# Saldo di dompet BCA otomatis berkurang Rp 50.000
+POST {{baseUrl}}/transactions
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "type": "EXPENSE",
+  "amount": 50000,
+  "description": "Makan siang nasi padang",
+  "walletId": "{{walletId}}",
+  "categoryId": "{{categoryId}}"
+}
+
+### 13. Alokasi Tabungan (Kirim Kas ke Pos Beli Laptop)
+# Saldo BCA berkurang Rp 1.000.000, Saldo Tabungan Laptop bertambah Rp 1.000.000
+POST {{baseUrl}}/transactions
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "type": "SAVING_DEPOSIT",
+  "amount": 1000000,
+  "description": "Nabung gaji bulan ini",
+  "walletId": "{{walletId}}",
+  "pocketId": "{{pocketId}}"
+}
+
+### 14. Ambil Riwayat Transaksi (Pagination & Detail)
+GET {{baseUrl}}/transactions?page=1&limit=10
+Authorization: Bearer {{authToken}}
+
+### ------------------------------------------------------------
+### DASHBOARD OVERVIEW & ANALYTICS
+### ------------------------------------------------------------
+
+### 15. Overview Dashboard (Total Liquid Cash, Dana Darurat, & Net Worth)
+GET {{baseUrl}}/finance/overview
+Authorization: Bearer {{authToken}}
+
+### 16. Analisis Pengeluaran & Breakdown Kategori
+GET {{baseUrl}}/transactions/analytics
+Authorization: Bearer {{authToken}}
+
+### ------------------------------------------------------------
+### SECURITY & ACCOUNT MANAGEMENT FLOW
+### ------------------------------------------------------------
+
+### 17. Request OTP Ganti Password
+POST {{baseUrl}}/auth/change-password/request-otp
+Authorization: Bearer {{authToken}}
+
+### 18. Forgot Password Request (Link Reset via Email)
+POST {{baseUrl}}/auth/forgot-password/request
+Content-Type: application/json
+
+{
+  "email": "budi@example.com"
+}
