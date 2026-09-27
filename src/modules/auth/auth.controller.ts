@@ -36,33 +36,28 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      // Jika akun pernah didaftarkan tetapi belum diverifikasi, buat dan kirim OTP baru
+      // Jika akun sudah terdaftar tapi belum verifikasi, kirim ulang OTP
       const otpCode = generateOTP();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 menit
 
       await prisma.emailVerification.deleteMany({
-        where: { 
-          userId: existingUser.id, 
-          type: 'EMAIL_VERIFICATION' 
-        },
+        where: { userId: existingUser.id },
       });
 
       await prisma.emailVerification.create({
         data: {
           userId: existingUser.id,
           code: otpCode,
-          type: 'EMAIL_VERIFICATION',
           expiresAt,
         },
       });
 
-      // Pengiriman email non-blocking agar API tetap merespon cepat
       sendVerificationEmail(existingUser.email, otpCode, 'Verifikasi Akun Finance Tracker').catch((err) => {
-        console.error('Non-blocking email delivery error:', err);
+        console.error('Email error:', err);
       });
 
       res.status(200).json({
-        message: 'Akun sudah pernah didaftarkan namun belum diverifikasi. Kode OTP baru telah dikirimkan.',
+        message: 'Akun sudah pernah didaftarkan namun belum diverifikasi. Kode OTP baru telah dikirimkan ke email Anda.',
         userId: existingUser.id,
       });
       return;
@@ -72,7 +67,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Buat User Baru (hanya field inti user untuk mencegah validation error)
+    // Buat User Baru
     const newUser = await prisma.user.create({
       data: {
         name,
@@ -82,7 +77,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       },
     });
 
-    // Inisialisasi Pos Awal "Dana Darurat" secara aman
+    // Inisialisasi Pos Awal "Dana Darurat"
     try {
       await prisma.pocket.create({
         data: {
@@ -93,7 +88,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         },
       });
     } catch (pocketError) {
-      console.warn('Inisialisasi pocket default dilewati/terabaikan:', pocketError);
+      console.warn('Pocket creation skipped:', pocketError);
     }
 
     // Buat OTP verifikasi pendaftaran 6 digit
@@ -104,14 +99,13 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       data: {
         userId: newUser.id,
         code: otpCode,
-        type: 'EMAIL_VERIFICATION',
         expiresAt,
       },
     });
 
     // Kirim email OTP
     sendVerificationEmail(newUser.email, otpCode, 'Verifikasi Akun Finance Tracker').catch((err) => {
-      console.error('Non-blocking email delivery error:', err);
+      console.error('Email error:', err);
     });
 
     res.status(201).json({
@@ -139,7 +133,7 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
 
     const normalizedEmail = email.toLowerCase().trim();
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-    
+
     if (!user) {
       res.status(404).json({ error: 'Akun dengan email ini tidak ditemukan' });
       return;
@@ -154,7 +148,6 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       where: {
         userId: user.id,
         code: code.trim(),
-        type: 'EMAIL_VERIFICATION',
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -175,12 +168,9 @@ export const verifyEmail = async (req: Request, res: Response): Promise<void> =>
       data: { isVerified: true },
     });
 
-    // Bersihkan kode OTP
+    // Hapus kode OTP yang sudah selesai dipakai
     await prisma.emailVerification.deleteMany({
-      where: { 
-        userId: user.id, 
-        type: 'EMAIL_VERIFICATION' 
-      },
+      where: { userId: user.id },
     });
 
     res.json({ message: 'Email berhasil diverifikasi! Anda sekarang dapat login.' });
@@ -244,7 +234,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-// 4. Request OTP untuk Ganti Password (Ketika sedang login)
+// 4. Request OTP untuk Ganti Password
 export const requestChangePasswordOTP = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
@@ -259,14 +249,13 @@ export const requestChangePasswordOTP = async (req: AuthRequest, res: Response):
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 menit
 
     await prisma.emailVerification.deleteMany({
-      where: { userId, type: 'CHANGE_PASSWORD' },
+      where: { userId },
     });
 
     await prisma.emailVerification.create({
       data: {
         userId,
         code: otpCode,
-        type: 'CHANGE_PASSWORD',
         expiresAt,
       },
     });
@@ -309,7 +298,6 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
       where: {
         userId,
         code: otpCode.trim(),
-        type: 'CHANGE_PASSWORD',
       },
     });
 
@@ -327,7 +315,7 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
     });
 
     await prisma.emailVerification.deleteMany({
-      where: { userId, type: 'CHANGE_PASSWORD' },
+      where: { userId },
     });
 
     res.json({ message: 'Kata sandi berhasil diperbarui' });
@@ -351,7 +339,6 @@ export const requestForgotPassword = async (req: Request, res: Response): Promis
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user) {
-      // Menghindari email enumeration
       res.json({ message: 'Jika email terdaftar, instruksi reset password telah dikirim ke email Anda.' });
       return;
     }
@@ -360,14 +347,13 @@ export const requestForgotPassword = async (req: Request, res: Response): Promis
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 menit
 
     await prisma.emailVerification.deleteMany({
-      where: { userId: user.id, type: 'FORGOT_PASSWORD' },
+      where: { userId: user.id },
     });
 
     await prisma.emailVerification.create({
       data: {
         userId: user.id,
         code: resetToken,
-        type: 'FORGOT_PASSWORD',
         expiresAt,
       },
     });
@@ -405,7 +391,6 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       where: {
         userId: user.id,
         code: token.trim(),
-        type: 'FORGOT_PASSWORD',
       },
     });
 
@@ -423,7 +408,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
 
     await prisma.emailVerification.deleteMany({
-      where: { userId: user.id, type: 'FORGOT_PASSWORD' },
+      where: { userId: user.id },
     });
 
     res.json({ message: 'Kata sandi berhasil direset! Silakan login dengan kata sandi baru Anda.' });
@@ -433,7 +418,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-// 8. Delete Account Permanen (Dengan Verifikasi Password)
+// 8. Delete Account Permanen
 export const deleteAccount = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
